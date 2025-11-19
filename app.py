@@ -265,27 +265,28 @@ with tab1:
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                         plot_bgcolor='white', # 차트 내부 배경색
                         paper_bgcolor='white', # 차트 외부 배경색
+                        # ... (생략) ...
                         # 실제 데이터 영역과 예측 데이터 영역 배경색 구분
                         shapes=[
                             dict( # 예측 영역 배경색 (연한 초록)
                                 type="rect",
                                 xref="x", yref="paper",
-                                x0=df_prophet['ds'].max(), 
+                                x0=df_prophet['ds'].max(), # <--- 수정: df_prophet의 ds(타임존 없는 마지막 시각) 사용
                                 y0=0, 
                                 x1=forecast['ds_kst'].max(), 
                                 y1=1,
-                                fillcolor="rgba(0,255,0,0.05)", # 연한 초록색
+                                fillcolor="rgba(0,255,0,0.05)",
                                 layer="below", 
                                 line_width=0
                             ),
                             dict( # 과거 데이터 영역 배경색 (연한 파랑)
                                 type="rect",
                                 xref="x", yref="paper",
-                                x0=df_prophet['ds_kst'].min(), 
+                                x0=df_prophet['ds'].min(), # <--- 수정: df_prophet의 ds(타임존 없는 시작 시각) 사용
                                 y0=0, 
-                                x1=df_prophet['ds_kst'].max(), 
+                                x1=df_prophet['ds'].max(), # <--- 수정: df_prophet의 ds(타임존 없는 마지막 시각) 사용
                                 y1=1,
-                                fillcolor="rgba(0,0,255,0.05)", # 연한 파란색
+                                fillcolor="rgba(0,0,255,0.05)",
                                 layer="below", 
                                 line_width=0
                             )
