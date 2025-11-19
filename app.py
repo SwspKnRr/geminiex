@@ -111,7 +111,11 @@ with tab1:
                         st.stop()
                     
                     # Prophet 데이터셋 준비
-                    df_prophet = df_5m[['Datetime', 'Close']].rename(columns={'Datetime': 'ds', 'y': 'y'})
+                    # df_5m 데이터프레임의 'Datetime' 컬럼을 'ds'로, 'Close' 컬럼을 'y'로 리네임합니다.
+                    df_prophet = df_5m[['Datetime_kst', 'Close']].rename(columns={'Datetime_kst': 'ds', 'Close': 'y'})
+                    
+                    # 데이터가 문자열이 아닌 숫자형인지 최종 확인
+                    df_prophet['y'] = pd.to_numeric(df_prophet['y'], errors='coerce')
                     
                     # 모델 학습
                     m = Prophet(changepoint_prior_scale=0.05, daily_seasonality=True, seasonality_mode='additive') 
