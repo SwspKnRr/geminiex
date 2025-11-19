@@ -129,9 +129,14 @@ with tab1:
                         st.stop()
                     
                     # Prophet 데이터셋 준비
-                    # df_5m 데이터프레임의 'Datetime' 컬럼을 'ds'로, 'Close' 컬럼을 'y'로 리네임합니다.
+                    # KST로 변환된 'Datetime_kst' 컬럼과 'Close' 컬럼을 사용
                     df_prophet = df_5m[['Datetime_kst', 'Close']].rename(columns={'Datetime_kst': 'ds', 'Close': 'y'})
                     
+                    # [핵심 수정] Prophet 학습 전, 'ds' 컬럼의 타임존 정보를 최종적으로 제거합니다.
+                    # KST 시각은 유지하면서 타임존만 None으로 설정합니다.
+                    if df_prophet['ds'].dt.tz is not None:
+                        df_prophet['ds'] = df_prophet['ds'].dt.tz_localize(None)
+                        
                     # 데이터가 문자열이 아닌 숫자형인지 최종 확인
                     df_prophet['y'] = pd.to_numeric(df_prophet['y'], errors='coerce')
                     
