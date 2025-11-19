@@ -100,23 +100,28 @@ def load_daily_data_with_indicators(ticker):
 # ---------------------------------------------------------
 tab1, tab2 = st.tabs(["⏱️ 5분봉 단기 예측 (Real-time)", "📈 상승 확률 분석 (AI Classifier)"])
 
+# ... (상단 import, load_5m_data 함수 등은 그대로) ...
+
 # =========================================================
-# TAB 1: 5분봉 단기 예측 (Real-time) - UI 최종 개선
+# TAB 1: 5분봉 단기 예측 (Real-time) - 범위 조절 옵션 추가
 # =========================================================
 with tab1:
     st.subheader(f"⏱️ {ticker} 5분봉 기반 단기 흐름 예측")
-    st.info("💡 참고: 무료 API 제한으로 최근 60일 간의 5분봉 데이터만 사용합니다. 차트는 일정 시간마다 새로고침됩니다.")
+    st.info("💡 참고: 무료 API 제한으로 최근 60일 간의 5분봉 데이터만 사용합니다.")
 
-    refresh_interval = st.slider("자동 새로고침 간격 (초)", 30, 300, 60, step=30)
+    # 1. UI 옵션 추가: 표시할 캔들 개수 설정
+    st.sidebar.markdown("---")
+    st.sidebar.header("단기 예측 옵션")
+    display_candlesticks = st.sidebar.slider("차트 표시 캔들 개수", 50, 600, 150, step=50) # 50개 ~ 600개, 기본값 150
+    refresh_interval = st.sidebar.slider("자동 새로고침 간격 (초)", 30, 300, 60, step=30)
     
-    placeholder = st.empty() # 실시간 차트를 업데이트할 빈 공간
+    placeholder = st.empty()
     
     # ---------------------------------------------------------
     # 자동 새로고침 로직
     # ---------------------------------------------------------
-    while True: # 무한 루프 (Streamlit 앱이 종료될 때까지 반복)
+    while True:
         with placeholder.container():
-            # KST 현재 시간 표시
             kst_now = datetime.now(pytz.timezone('Asia/Seoul'))
             st.write(f"마지막 업데이트 (KST): {kst_now.strftime('%Y-%m-%d %H:%M:%S')}")
             
@@ -127,80 +132,72 @@ with tab1:
                     if df_5m.empty:
                         st.error("데이터를 가져올 수 없습니다. 종목 코드 또는 시장 상황을 확인해주세요.")
                         st.stop()
+
+                    # -------------------------------------------------------
+                    # [핵심 수정] 표시할 캔들 개수만큼 데이터 슬라이싱
+                    # -------------------------------------------------------
+                    df_5m_display = df_5m.tail(display_candlesticks).copy() 
                     
-                    # Prophet 데이터셋 준비
-                    # KST로 변환된 'Datetime_kst' 컬럼과 'Close' 컬럼을 사용
+                    # Prophet 학습용 데이터는 전체 데이터를 사용하고, 시각화만 슬라이싱된 데이터 사용
+                    # (혹은 학습 데이터도 슬라이싱해서 속도를 높일 수도 있으나, 정확도를 위해 전체 사용)
+                    
+                    # Prophet 데이터셋 준비 (학습은 전체 데이터로)
                     df_prophet = df_5m[['Datetime_kst', 'Close']].rename(columns={'Datetime_kst': 'ds', 'Close': 'y'})
                     
-                    # [핵심 수정] Prophet 학습 전, 'ds' 컬럼의 타임존 정보를 최종적으로 제거합니다.
-                    # KST 시각은 유지하면서 타임존만 None으로 설정합니다.
+                    # Prophet 학습 전, 'ds' 컬럼의 타임존 정보를 최종적으로 제거합니다.
                     if df_prophet['ds'].dt.tz is not None:
                         df_prophet['ds'] = df_prophet['ds'].dt.tz_localize(None)
                         
-                    # 데이터가 문자열이 아닌 숫자형인지 최종 확인
                     df_prophet['y'] = pd.to_numeric(df_prophet['y'], errors='coerce')
                     
                     # 모델 학습
                     m = Prophet(changepoint_prior_scale=0.05, daily_seasonality=True, seasonality_mode='additive') 
                     m.fit(df_prophet)
                     
-                    # 향후 12개 구간(60분) 예측 (5분 간격)
+                    # 향후 12개 구간(60분) 예측
                     future = m.make_future_dataframe(periods=12, freq='5min')
                     forecast = m.predict(future)
                     
-                    # Prophet의 forecast['ds'] 컬럼이 UTC이므로 KST로 변환
-                    # yfinance 데이터는 이미 tz_localize(None)으로 타임존 제거되었으므로, forecast만 KST로 변경
-                    # 실제 시각화 시점은 KST로 맞춰주기 위함
-                    forecast['ds_kst'] = forecast['ds'].dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
-                    df_5m['Datetime_kst'] = df_5m['Datetime'].dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
+                    # forecast 데이터에 KST 타임존 정보를 부여
+                    forecast['ds_kst'] = forecast['ds'].dt.tz_localize('Asia/Seoul')
 
 
                     # --- 차트 그리기 (캔들스틱 + 예측선) ---
                     fig = go.Figure()
 
-                    # 1. 과거 캔들스틱 차트 (실제 데이터)
+                    # 1. 과거 캔들스틱 차트 (슬라이싱된 데이터 사용: df_5m_display)
                     fig.add_trace(go.Candlestick(
-                        x=df_5m['Datetime_kst'], # KST 시간 사용
-                        open=df_5m['Open'],
-                        high=df_5m['High'],
-                        low=df_5m['Low'],
-                        close=df_5m['Close'],
+                        x=df_5m_display['Datetime_kst'],
+                        open=df_5m_display['Open'],
+                        high=df_5m_display['High'],
+                        low=df_5m_display['Low'],
+                        close=df_5m_display['Close'],
                         name='과거 주가',
-                        increasing_line_color='red', # 양봉: 빨간색
-                        decreasing_line_color='blue' # 음봉: 파란색
+                        increasing_line_color='red',
+                        decreasing_line_color='blue'
                     ))
 
-                    # 2. Prophet 예측 선 (점선)
+                    # 2. Prophet 예측 선 및 신뢰 구간 (전체 데이터 사용)
+                    # 예측선
                     fig.add_trace(go.Scatter(
-                        x=forecast['ds_kst'], # KST 시간 사용
+                        x=forecast['ds_kst'],
                         y=forecast['yhat'],
                         mode='lines',
-                        line=dict(color='purple', width=2, dash='dot'), # 보라색 점선
+                        line=dict(color='purple', width=2, dash='dot'),
                         name='예측 주가'
                     ))
-
-                    # 3. 예측 신뢰 구간 (연한 회색 배경)
+                    # 신뢰 구간 (생략)
                     fig.add_trace(go.Scatter(
-                        x=forecast['ds_kst'], # KST 시간 사용
-                        y=forecast['yhat_upper'],
-                        mode='lines',
-                        line=dict(width=0),
-                        showlegend=False,
-                        hoverinfo='skip'
+                        x=forecast['ds_kst'], y=forecast['yhat_upper'], mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
                     ))
                     fig.add_trace(go.Scatter(
-                        x=forecast['ds_kst'], # KST 시간 사용
-                        y=forecast['yhat_lower'],
-                        mode='lines',
-                        line=dict(width=0),
-                        fill='tonexty', 
-                        fillcolor='rgba(128,0,128,0.05)', # 연한 보라색 계열로 신뢰구간 채우기
-                        name='예측 신뢰구간',
-                        hoverinfo='skip'
+                        x=forecast['ds_kst'], y=forecast['yhat_lower'], mode='lines', line=dict(width=0), fill='tonexty', 
+                        fillcolor='rgba(128,0,128,0.05)', name='예측 신뢰구간', hoverinfo='skip'
                     ))
 
-                    # 4. 현재 종가 기준으로 수평 점선 추가
-                    current_close_price = df_5m['Close'].iloc[-1]
+
+                    # 3. 현재 종가 기준으로 수평 점선 추가
+                    current_close_price = df_5m_display['Close'].iloc[-1]
                     fig.add_hline(
                         y=current_close_price, 
                         line_dash="dash", 
@@ -209,14 +206,12 @@ with tab1:
                         annotation_position="bottom right"
                     )
 
-                    # 5. 예측값 텍스트 표시 (5분 뒤, 30분 뒤)
-                    # 현재 시간 다음 5분 뒤 (1칸 뒤)
-                    # df_prophet['ds'].max()는 마지막 실제 데이터의 시간
-                    # forecast['ds']에서 이 시간 이후 첫 번째 인덱스 찾기
+                    # 4. 예측값 텍스트 표시 (5분 뒤, 30분 뒤)
+                    # ... (이하 텍스트 표시 로직은 변경 없음) ...
                     future_start_idx = forecast[forecast['ds'] > df_prophet['ds'].max()].index
+                    
                     if not future_start_idx.empty:
                         future_start_idx = future_start_idx[0]
-                        
                         future_5min_idx = future_start_idx
                         future_30min_idx = future_start_idx + 5 
 
@@ -229,75 +224,56 @@ with tab1:
 
                             # 5분 뒤 예상가 텍스트
                             fig.add_annotation(
-                                x=forecast.loc[future_5min_idx, 'ds_kst'], 
-                                y=price_5min,
+                                x=forecast.loc[future_5min_idx, 'ds_kst'], y=price_5min,
                                 text=f"+5분: {price_5min:.2f} ({time_5min_kst})",
-                                showarrow=True,
-                                arrowhead=2,
-                                arrowcolor='green',
+                                showarrow=True, arrowhead=2, arrowcolor='green',
                                 font=dict(color='green', size=12, family='Arial'),
-                                xshift=10, yshift=10,
-                                bgcolor="rgba(255,255,255,0.7)"
+                                xshift=10, yshift=10, bgcolor="rgba(255,255,255,0.7)"
                             )
                             # 30분 뒤 예상가 텍스트
                             fig.add_annotation(
-                                x=forecast.loc[future_30min_idx, 'ds_kst'], 
-                                y=price_30min,
+                                x=forecast.loc[future_30min_idx, 'ds_kst'], y=price_30min,
                                 text=f"+30분: {price_30min:.2f} ({time_30min_kst})",
-                                showarrow=True,
-                                arrowhead=2,
-                                arrowcolor='green',
+                                showarrow=True, arrowhead=2, arrowcolor='green',
                                 font=dict(color='green', size=12, family='Arial'),
-                                xshift=10, yshift=10,
-                                bgcolor="rgba(255,255,255,0.7)"
+                                xshift=10, yshift=10, bgcolor="rgba(255,255,255,0.7)"
                             )
                         
-                    # --- 레이아웃 설정 (첨부 이미지 UI와 유사하게) ---
+                    # --- 레이아웃 설정 ---
                     fig.update_layout(
-                        title=f"📈 {ticker} 5분봉 실시간 차트 및 단기 예측 (KST)",
-                        xaxis_rangeslider_visible=False, # 하단 Range Slider 제거
-                        xaxis_title="시간 (KST)",
-                        yaxis_title="가격",
-                        height=600,
-                        hovermode="x unified",
-                        template="plotly_white", # 흰색 배경 테마 (이미지와 유사)
-                        margin=dict(l=20, r=20, t=50, b=20),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                        plot_bgcolor='white', # 차트 내부 배경색
-                        paper_bgcolor='white', # 차트 외부 배경색
-                        # ... (생략) ...
+                        title=f"📈 {ticker} 5분봉 실시간 차트 및 단기 예측 (표시 캔들: {len(df_5m_display)}개)",
+                        xaxis_rangeslider_visible=False,
+                        # ... (이하 레이아웃 설정은 동일) ...
+                        
                         # 실제 데이터 영역과 예측 데이터 영역 배경색 구분
                         shapes=[
                             dict( # 예측 영역 배경색 (연한 초록)
                                 type="rect",
                                 xref="x", yref="paper",
-                                x0=df_prophet['ds'].max(), # <--- 수정: df_prophet의 ds(타임존 없는 마지막 시각) 사용
-                                y0=0, 
-                                x1=forecast['ds'].max(), 
-                                y1=1,
-                                fillcolor="rgba(0,255,0,0.05)",
-                                layer="below", 
-                                line_width=0
+                                x0=df_prophet['ds'].max(), 
+                                y0=0, x1=forecast['ds_kst'].max(), y1=1,
+                                fillcolor="rgba(0,255,0,0.05)", layer="below", line_width=0
                             ),
                             dict( # 과거 데이터 영역 배경색 (연한 파랑)
                                 type="rect",
                                 xref="x", yref="paper",
-                                x0=df_prophet['ds'].min(), # <--- 수정: df_prophet의 ds(타임존 없는 시작 시각) 사용
-                                y0=0, 
-                                x1=df_prophet['ds'].max(), # <--- 수정: df_prophet의 ds(타임존 없는 마지막 시각) 사용
-                                y1=1,
-                                fillcolor="rgba(0,0,255,0.05)",
-                                layer="below", 
-                                line_width=0
+                                # [수정] 차트 표시 시작점을 슬라이싱된 데이터의 시작점으로 설정
+                                x0=df_5m_display['Datetime_kst'].min(), 
+                                y0=0, x1=df_prophet['ds'].max(), y1=1,
+                                fillcolor="rgba(0,0,255,0.05)", layer="below", line_width=0
                             )
-                        ]
+                        ],
+                        xaxis=dict(
+                            # [추가] 차트의 x축 시작점을 슬라이싱된 데이터의 시작점으로 강제 설정하여 깔끔하게 보임
+                            range=[df_5m_display['Datetime_kst'].min(), forecast['ds_kst'].max()]
+                        )
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
                     
                     st.write("---")
                     st.write("##### 최근 5분봉 데이터 (마지막 업데이트 시점):")
-                    st.dataframe(df_5m.tail())
+                    st.dataframe(df_5m_display.tail())
                     
                 except Exception as e:
                     st.error(f"단기 예측 중 오류 발생: {e}")
