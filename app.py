@@ -30,13 +30,24 @@ ticker = st.sidebar.text_input("종목 코드 (예: AAPL, TSLA, 005930.KS)", "AA
 def load_5m_data(ticker):
     # yfinance 제약: 5분봉은 최대 60일치만 가져올 수 있음
     data = yf.download(ticker, interval="5m", period="60d")
+    
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = data.columns.get_level_values(0)
+        
     data.reset_index(inplace=True)
     
     # Timezone 제거 (Prophet 오류 방지)
     if 'Datetime' in data.columns:
-        data['Datetime'] = pd.to_datetime(data['Datetime']).dt.tz_localize(None)
+        # data['Datetime'] = pd.to_datetime(data['Datetime']).dt.tz_localize(None) # 이전 코드
+        
+        # [핵심 수정] Datetime 컬럼을 KST로 변환 후, Datetime_kst 컬럼 생성
+        # yfinance의 Datetime은 UTC 기준이므로, KST로 변환하여 새로운 컬럼을 만듭니다.
+        # 이 컬럼을 차트 및 Prophet 학습에 사용합니다.
+        data['Datetime_kst'] = data['Datetime'].dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
+        
+        # Prophet을 위해 기존 Datetime 컬럼에서 Timezone 정보만 제거
+        data['Datetime'] = data['Datetime'].dt.tz_localize(None)
+        
     return data
 
 @st.cache_data
