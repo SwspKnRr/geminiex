@@ -273,7 +273,7 @@ with tab1:
                                 xref="x", yref="paper",
                                 x0=df_prophet['ds'].max(), # <--- 수정: df_prophet의 ds(타임존 없는 마지막 시각) 사용
                                 y0=0, 
-                                x1=forecast['ds_kst'].max(), 
+                                x1=forecast['ds'].max(), 
                                 y1=1,
                                 fillcolor="rgba(0,255,0,0.05)",
                                 layer="below", 
