@@ -2,12 +2,15 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import pytz
 from prophet import Prophet
+from datetime import date, timedelta, datetime
 from prophet.plot import plot_plotly
 from plotly import graph_objs as go
 from datetime import date, timedelta
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
+
 
 # ---------------------------------------------------------
 # 1. 공통 함수 및 설정
@@ -80,25 +83,25 @@ def load_daily_data_with_indicators(ticker):
 tab1, tab2 = st.tabs(["⏱️ 5분봉 단기 예측 (Real-time)", "📈 상승 확률 분석 (AI Classifier)"])
 
 # =========================================================
-# TAB 1: 5분봉 단기 예측 (Real-time) - UI 대폭 개선
+# TAB 1: 5분봉 단기 예측 (Real-time) - UI 최종 개선
 # =========================================================
 with tab1:
     st.subheader(f"⏱️ {ticker} 5분봉 기반 단기 흐름 예측")
-    st.info("💡 참고: 무료 API 제한으로 최근 60일 간의 5분봉 데이터만 사용하며, 실시간 차트는 일정 시간마다 새로고침됩니다.")
+    st.info("💡 참고: 무료 API 제한으로 최근 60일 간의 5분봉 데이터만 사용합니다. 차트는 일정 시간마다 새로고침됩니다.")
 
     refresh_interval = st.slider("자동 새로고침 간격 (초)", 30, 300, 60, step=30)
     
     placeholder = st.empty() # 실시간 차트를 업데이트할 빈 공간
-    
-    # 임시적으로 버튼 제거, 자동 새로고침 로직으로 대체
-    # if st.button("단기 예측 실행 (Tab 1)"): 
     
     # ---------------------------------------------------------
     # 자동 새로고침 로직
     # ---------------------------------------------------------
     while True: # 무한 루프 (Streamlit 앱이 종료될 때까지 반복)
         with placeholder.container():
-            st.write(f"마지막 업데이트: {pd.to_datetime('now').strftime('%Y-%m-%d %H:%M:%S')}")
+            # KST 현재 시간 표시
+            kst_now = datetime.now(pytz.timezone('Asia/Seoul'))
+            st.write(f"마지막 업데이트 (KST): {kst_now.strftime('%Y-%m-%d %H:%M:%S')}")
+            
             with st.spinner('5분봉 데이터 다운로드 및 예측 모델 학습 중...'):
                 try:
                     df_5m = load_5m_data(ticker)
@@ -108,11 +111,9 @@ with tab1:
                         st.stop()
                     
                     # Prophet 데이터셋 준비
-                    # Prophet은 'ds' (날짜시간)와 'y' (값) 컬럼을 필요로 함
-                    df_prophet = df_5m[['Datetime', 'Close']].rename(columns={'Datetime': 'ds', 'Close': 'y'})
+                    df_prophet = df_5m[['Datetime', 'Close']].rename(columns={'Datetime': 'ds', 'y': 'y'})
                     
-                    # 모델 학습 (Intraday 설정)
-                    # changepoint_prior_scale: 추세 변화 유연성, seasonality_mode: 계절성 모델링 방식
+                    # 모델 학습
                     m = Prophet(changepoint_prior_scale=0.05, daily_seasonality=True, seasonality_mode='additive') 
                     m.fit(df_prophet)
                     
@@ -120,33 +121,40 @@ with tab1:
                     future = m.make_future_dataframe(periods=12, freq='5min')
                     forecast = m.predict(future)
                     
+                    # Prophet의 forecast['ds'] 컬럼이 UTC이므로 KST로 변환
+                    # yfinance 데이터는 이미 tz_localize(None)으로 타임존 제거되었으므로, forecast만 KST로 변경
+                    # 실제 시각화 시점은 KST로 맞춰주기 위함
+                    forecast['ds_kst'] = forecast['ds'].dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
+                    df_5m['Datetime_kst'] = df_5m['Datetime'].dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
+
+
                     # --- 차트 그리기 (캔들스틱 + 예측선) ---
                     fig = go.Figure()
 
                     # 1. 과거 캔들스틱 차트 (실제 데이터)
                     fig.add_trace(go.Candlestick(
-                        x=df_5m['Datetime'],
+                        x=df_5m['Datetime_kst'], # KST 시간 사용
                         open=df_5m['Open'],
                         high=df_5m['High'],
                         low=df_5m['Low'],
                         close=df_5m['Close'],
                         name='과거 주가',
-                        increasing_line_color='red', # 양봉
-                        decreasing_line_color='blue' # 음봉
+                        increasing_line_color='red', # 양봉: 빨간색
+                        decreasing_line_color='blue' # 음봉: 파란색
                     ))
 
                     # 2. Prophet 예측 선 (점선)
                     fig.add_trace(go.Scatter(
-                        x=forecast['ds'],
+                        x=forecast['ds_kst'], # KST 시간 사용
                         y=forecast['yhat'],
                         mode='lines',
-                        line=dict(color='orange', width=2, dash='dot'), # 점선으로 변경
+                        line=dict(color='purple', width=2, dash='dot'), # 보라색 점선
                         name='예측 주가'
                     ))
 
-                    # 3. Prophet 신뢰 구간 (연한 색으로)
+                    # 3. 예측 신뢰 구간 (연한 회색 배경)
                     fig.add_trace(go.Scatter(
-                        x=forecast['ds'],
+                        x=forecast['ds_kst'], # KST 시간 사용
                         y=forecast['yhat_upper'],
                         mode='lines',
                         line=dict(width=0),
@@ -154,64 +162,107 @@ with tab1:
                         hoverinfo='skip'
                     ))
                     fig.add_trace(go.Scatter(
-                        x=forecast['ds'],
+                        x=forecast['ds_kst'], # KST 시간 사용
                         y=forecast['yhat_lower'],
                         mode='lines',
                         line=dict(width=0),
-                        fill='tonexty', # yhat_upper와 yhat_lower 사이 채우기
-                        fillcolor='rgba(255,165,0,0.1)', # 주황색 계열, 투명도 10%
+                        fill='tonexty', 
+                        fillcolor='rgba(128,0,128,0.05)', # 연한 보라색 계열로 신뢰구간 채우기
                         name='예측 신뢰구간',
                         hoverinfo='skip'
                     ))
 
-                    # 4. 예측값 텍스트 표시 (5분 뒤, 30분 뒤)
+                    # 4. 현재 종가 기준으로 수평 점선 추가
+                    current_close_price = df_5m['Close'].iloc[-1]
+                    fig.add_hline(
+                        y=current_close_price, 
+                        line_dash="dash", 
+                        line_color="black", 
+                        annotation_text=f"현재가: {current_close_price:.2f}", 
+                        annotation_position="bottom right"
+                    )
+
+                    # 5. 예측값 텍스트 표시 (5분 뒤, 30분 뒤)
                     # 현재 시간 다음 5분 뒤 (1칸 뒤)
-                    future_5min_idx = forecast[forecast['ds'] > df_prophet['ds'].max()].index[0]
-                    # 현재 시간 다음 30분 뒤 (6칸 뒤)
-                    future_30min_idx = future_5min_idx + 5 
-
-                    # forecast 데이터프레임의 인덱스가 순차적으로 증가한다고 가정
-                    if future_30min_idx < len(forecast):
-                        price_5min = forecast.loc[future_5min_idx, 'yhat']
-                        price_30min = forecast.loc[future_30min_idx, 'yhat']
+                    # df_prophet['ds'].max()는 마지막 실제 데이터의 시간
+                    # forecast['ds']에서 이 시간 이후 첫 번째 인덱스 찾기
+                    future_start_idx = forecast[forecast['ds'] > df_prophet['ds'].max()].index
+                    if not future_start_idx.empty:
+                        future_start_idx = future_start_idx[0]
                         
-                        time_5min = forecast.loc[future_5min_idx, 'ds'].strftime('%H:%M')
-                        time_30min = forecast.loc[future_30min_idx, 'ds'].strftime('%H:%M')
+                        future_5min_idx = future_start_idx
+                        future_30min_idx = future_start_idx + 5 
 
-                        # 5분 뒤 예상가 마커 및 텍스트
-                        fig.add_trace(go.Scatter(
-                            x=[forecast.loc[future_5min_idx, 'ds']], 
-                            y=[price_5min],
-                            mode='markers+text',
-                            marker=dict(size=10, color='red', symbol='star'),
-                            text=[f"5분 뒤: {price_5min:.2f} ({time_5min})"],
-                            textposition="top center",
-                            name='5분 뒤 예상가',
-                            textfont=dict(color='red', size=12)
-                        ))
-                        # 30분 뒤 예상가 마커 및 텍스트
-                        fig.add_trace(go.Scatter(
-                            x=[forecast.loc[future_30min_idx, 'ds']], 
-                            y=[price_30min],
-                            mode='markers+text',
-                            marker=dict(size=10, color='red', symbol='star'),
-                            text=[f"30분 뒤: {price_30min:.2f} ({time_30min})"],
-                            textposition="top center",
-                            name='30분 뒤 예상가',
-                            textfont=dict(color='red', size=12)
-                        ))
-                    
-                    # 레이아웃 설정 (증권사 앱 스타일)
+                        if future_30min_idx < len(forecast):
+                            price_5min = forecast.loc[future_5min_idx, 'yhat']
+                            price_30min = forecast.loc[future_30min_idx, 'yhat']
+                            
+                            time_5min_kst = forecast.loc[future_5min_idx, 'ds_kst'].strftime('%H:%M')
+                            time_30min_kst = forecast.loc[future_30min_idx, 'ds_kst'].strftime('%H:%M')
+
+                            # 5분 뒤 예상가 텍스트
+                            fig.add_annotation(
+                                x=forecast.loc[future_5min_idx, 'ds_kst'], 
+                                y=price_5min,
+                                text=f"+5분: {price_5min:.2f} ({time_5min_kst})",
+                                showarrow=True,
+                                arrowhead=2,
+                                arrowcolor='green',
+                                font=dict(color='green', size=12, family='Arial'),
+                                xshift=10, yshift=10,
+                                bgcolor="rgba(255,255,255,0.7)"
+                            )
+                            # 30분 뒤 예상가 텍스트
+                            fig.add_annotation(
+                                x=forecast.loc[future_30min_idx, 'ds_kst'], 
+                                y=price_30min,
+                                text=f"+30분: {price_30min:.2f} ({time_30min_kst})",
+                                showarrow=True,
+                                arrowhead=2,
+                                arrowcolor='green',
+                                font=dict(color='green', size=12, family='Arial'),
+                                xshift=10, yshift=10,
+                                bgcolor="rgba(255,255,255,0.7)"
+                            )
+                        
+                    # --- 레이아웃 설정 (첨부 이미지 UI와 유사하게) ---
                     fig.update_layout(
-                        title=f"📈 {ticker} 5분봉 실시간 차트 및 단기 예측",
+                        title=f"📈 {ticker} 5분봉 실시간 차트 및 단기 예측 (KST)",
                         xaxis_rangeslider_visible=False, # 하단 Range Slider 제거
-                        xaxis_title="시간",
+                        xaxis_title="시간 (KST)",
                         yaxis_title="가격",
                         height=600,
-                        hovermode="x unified", # 마우스 오버 시 모든 데이터 한꺼번에 표시
-                        template="plotly_dark", # 다크 모드 테마 적용 (증권사 앱 느낌)
+                        hovermode="x unified",
+                        template="plotly_white", # 흰색 배경 테마 (이미지와 유사)
                         margin=dict(l=20, r=20, t=50, b=20),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                        plot_bgcolor='white', # 차트 내부 배경색
+                        paper_bgcolor='white', # 차트 외부 배경색
+                        # 실제 데이터 영역과 예측 데이터 영역 배경색 구분
+                        shapes=[
+                            dict( # 예측 영역 배경색 (연한 초록)
+                                type="rect",
+                                xref="x", yref="paper",
+                                x0=df_prophet['ds'].max(), 
+                                y0=0, 
+                                x1=forecast['ds_kst'].max(), 
+                                y1=1,
+                                fillcolor="rgba(0,255,0,0.05)", # 연한 초록색
+                                layer="below", 
+                                line_width=0
+                            ),
+                            dict( # 과거 데이터 영역 배경색 (연한 파랑)
+                                type="rect",
+                                xref="x", yref="paper",
+                                x0=df_prophet['ds_kst'].min(), 
+                                y0=0, 
+                                x1=df_prophet['ds_kst'].max(), 
+                                y1=1,
+                                fillcolor="rgba(0,0,255,0.05)", # 연한 파란색
+                                layer="below", 
+                                line_width=0
+                            )
+                        ]
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
