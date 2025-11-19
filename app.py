@@ -72,48 +72,161 @@ def load_daily_data_with_indicators(ticker):
     df.reset_index(inplace=True)
     return df
 
+# ... (상단 import 및 공통 설정, load_5m_data 함수 등은 그대로) ...
+
 # ---------------------------------------------------------
 # 3. 탭 구성
 # ---------------------------------------------------------
 tab1, tab2 = st.tabs(["⏱️ 5분봉 단기 예측 (Real-time)", "📈 상승 확률 분석 (AI Classifier)"])
 
 # =========================================================
-# TAB 1: 5분봉 단기 예측
+# TAB 1: 5분봉 단기 예측 (Real-time) - UI 대폭 개선
 # =========================================================
 with tab1:
     st.subheader(f"⏱️ {ticker} 5분봉 기반 단기 흐름 예측")
-    st.info("💡 참고: 무료 API 제한으로 최근 60일 간의 5분봉 데이터만 사용합니다.")
+    st.info("💡 참고: 무료 API 제한으로 최근 60일 간의 5분봉 데이터만 사용하며, 실시간 차트는 일정 시간마다 새로고침됩니다.")
 
-    if st.button("단기 예측 실행 (Tab 1)"):
-        with st.spinner('5분봉 데이터 다운로드 및 학습 중...'):
-            try:
-                df_5m = load_5m_data(ticker)
-                
-                if df_5m.empty:
-                    st.error("데이터를 가져올 수 없습니다.")
-                else:
+    refresh_interval = st.slider("자동 새로고침 간격 (초)", 30, 300, 60, step=30)
+    
+    placeholder = st.empty() # 실시간 차트를 업데이트할 빈 공간
+    
+    # 임시적으로 버튼 제거, 자동 새로고침 로직으로 대체
+    # if st.button("단기 예측 실행 (Tab 1)"): 
+    
+    # ---------------------------------------------------------
+    # 자동 새로고침 로직
+    # ---------------------------------------------------------
+    while True: # 무한 루프 (Streamlit 앱이 종료될 때까지 반복)
+        with placeholder.container():
+            st.write(f"마지막 업데이트: {pd.to_datetime('now').strftime('%Y-%m-%d %H:%M:%S')}")
+            with st.spinner('5분봉 데이터 다운로드 및 예측 모델 학습 중...'):
+                try:
+                    df_5m = load_5m_data(ticker)
+                    
+                    if df_5m.empty:
+                        st.error("데이터를 가져올 수 없습니다. 종목 코드 또는 시장 상황을 확인해주세요.")
+                        st.stop()
+                    
                     # Prophet 데이터셋 준비
+                    # Prophet은 'ds' (날짜시간)와 'y' (값) 컬럼을 필요로 함
                     df_prophet = df_5m[['Datetime', 'Close']].rename(columns={'Datetime': 'ds', 'Close': 'y'})
                     
                     # 모델 학습 (Intraday 설정)
-                    m = Prophet(changepoint_prior_scale=0.05, daily_seasonality=True) 
+                    # changepoint_prior_scale: 추세 변화 유연성, seasonality_mode: 계절성 모델링 방식
+                    m = Prophet(changepoint_prior_scale=0.05, daily_seasonality=True, seasonality_mode='additive') 
                     m.fit(df_prophet)
                     
-                    # 향후 12개 구간(60분) 예측
+                    # 향후 12개 구간(60분) 예측 (5분 간격)
                     future = m.make_future_dataframe(periods=12, freq='5min')
                     forecast = m.predict(future)
                     
-                    # 시각화
-                    fig = plot_plotly(m, forecast)
-                    fig.update_layout(title=f"{ticker} 향후 60분 주가 흐름 예측")
+                    # --- 차트 그리기 (캔들스틱 + 예측선) ---
+                    fig = go.Figure()
+
+                    # 1. 과거 캔들스틱 차트 (실제 데이터)
+                    fig.add_trace(go.Candlestick(
+                        x=df_5m['Datetime'],
+                        open=df_5m['Open'],
+                        high=df_5m['High'],
+                        low=df_5m['Low'],
+                        close=df_5m['Close'],
+                        name='과거 주가',
+                        increasing_line_color='red', # 양봉
+                        decreasing_line_color='blue' # 음봉
+                    ))
+
+                    # 2. Prophet 예측 선 (점선)
+                    fig.add_trace(go.Scatter(
+                        x=forecast['ds'],
+                        y=forecast['yhat'],
+                        mode='lines',
+                        line=dict(color='orange', width=2, dash='dot'), # 점선으로 변경
+                        name='예측 주가'
+                    ))
+
+                    # 3. Prophet 신뢰 구간 (연한 색으로)
+                    fig.add_trace(go.Scatter(
+                        x=forecast['ds'],
+                        y=forecast['yhat_upper'],
+                        mode='lines',
+                        line=dict(width=0),
+                        showlegend=False,
+                        hoverinfo='skip'
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=forecast['ds'],
+                        y=forecast['yhat_lower'],
+                        mode='lines',
+                        line=dict(width=0),
+                        fill='tonexty', # yhat_upper와 yhat_lower 사이 채우기
+                        fillcolor='rgba(255,165,0,0.1)', # 주황색 계열, 투명도 10%
+                        name='예측 신뢰구간',
+                        hoverinfo='skip'
+                    ))
+
+                    # 4. 예측값 텍스트 표시 (5분 뒤, 30분 뒤)
+                    # 현재 시간 다음 5분 뒤 (1칸 뒤)
+                    future_5min_idx = forecast[forecast['ds'] > df_prophet['ds'].max()].index[0]
+                    # 현재 시간 다음 30분 뒤 (6칸 뒤)
+                    future_30min_idx = future_5min_idx + 5 
+
+                    # forecast 데이터프레임의 인덱스가 순차적으로 증가한다고 가정
+                    if future_30min_idx < len(forecast):
+                        price_5min = forecast.loc[future_5min_idx, 'yhat']
+                        price_30min = forecast.loc[future_30min_idx, 'yhat']
+                        
+                        time_5min = forecast.loc[future_5min_idx, 'ds'].strftime('%H:%M')
+                        time_30min = forecast.loc[future_30min_idx, 'ds'].strftime('%H:%M')
+
+                        # 5분 뒤 예상가 마커 및 텍스트
+                        fig.add_trace(go.Scatter(
+                            x=[forecast.loc[future_5min_idx, 'ds']], 
+                            y=[price_5min],
+                            mode='markers+text',
+                            marker=dict(size=10, color='red', symbol='star'),
+                            text=[f"5분 뒤: {price_5min:.2f} ({time_5min})"],
+                            textposition="top center",
+                            name='5분 뒤 예상가',
+                            textfont=dict(color='red', size=12)
+                        ))
+                        # 30분 뒤 예상가 마커 및 텍스트
+                        fig.add_trace(go.Scatter(
+                            x=[forecast.loc[future_30min_idx, 'ds']], 
+                            y=[price_30min],
+                            mode='markers+text',
+                            marker=dict(size=10, color='red', symbol='star'),
+                            text=[f"30분 뒤: {price_30min:.2f} ({time_30min})"],
+                            textposition="top center",
+                            name='30분 뒤 예상가',
+                            textfont=dict(color='red', size=12)
+                        ))
+                    
+                    # 레이아웃 설정 (증권사 앱 스타일)
+                    fig.update_layout(
+                        title=f"📈 {ticker} 5분봉 실시간 차트 및 단기 예측",
+                        xaxis_rangeslider_visible=False, # 하단 Range Slider 제거
+                        xaxis_title="시간",
+                        yaxis_title="가격",
+                        height=600,
+                        hovermode="x unified", # 마우스 오버 시 모든 데이터 한꺼번에 표시
+                        template="plotly_dark", # 다크 모드 테마 적용 (증권사 앱 느낌)
+                        margin=dict(l=20, r=20, t=50, b=20),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
+                    
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    # 최근 데이터 표시
-                    st.write("최근 5분봉 데이터:")
+                    st.write("---")
+                    st.write("##### 최근 5분봉 데이터 (마지막 업데이트 시점):")
                     st.dataframe(df_5m.tail())
                     
-            except Exception as e:
-                st.error(f"에러 발생: {e}")
+                except Exception as e:
+                    st.error(f"단기 예측 중 오류 발생: {e}")
+                    st.write("상세 에러:", e)
+        
+        # 지정된 새로고침 간격만큼 대기
+        import time
+        time.sleep(refresh_interval)
 
 # =========================================================
 # TAB 2: 상승 확률 분석 (분류 모델)
