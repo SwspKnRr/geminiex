@@ -26,10 +26,17 @@ ticker = st.sidebar.text_input("종목 코드 (예: AAPL, TSLA, 005930.KS)", "AA
 # ---------------------------------------------------------
 # 2. 데이터 로드 함수들
 # ---------------------------------------------------------
+# ---------------------------------------------------------
+# 2. 데이터 로드 함수들
+# ---------------------------------------------------------
+# ---------------------------------------------------------
+# 2. 데이터 로드 함수들
+# ---------------------------------------------------------
 @st.cache_data
-def load_5m_data(ticker):
+def load_intraday_data(ticker, interval):
     # yfinance 제약: 5분봉은 최대 60일치만 가져올 수 있음
-    data = yf.download(ticker, interval="5m", period="60d")
+    # [수정] prepost=True 옵션을 추가하여 프리장/애프터장 데이터 포함
+    data = yf.download(ticker, interval=interval, period="60d", prepost=True)
     
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = data.columns.get_level_values(0)
@@ -40,22 +47,22 @@ def load_5m_data(ticker):
     if 'Datetime' in data.columns:
         dt_col = data['Datetime']
         
-        # 1. Datetime 컬럼이 이미 tz-aware인지 확인
+        # 1. Datetime 컬럼이 이미 tz-aware인지 확인 (캐시 충돌 방지)
         if dt_col.dt.tz is None:
-            # tz-aware가 아니면 (대부분의 경우 yfinance가 처음 다운로드할 때) UTC를 부여
             dt_col = dt_col.dt.tz_localize('UTC')
         
         # 2. Datetime_kst 컬럼 생성 (KST로 변환)
-        # 이미 tz-aware이므로 tz_convert를 사용
         data['Datetime_kst'] = dt_col.dt.tz_convert('Asia/Seoul')
         
-        # 3. Prophet 사용을 위해 기존 Datetime 컬럼에서 Timezone 정보 제거 (tz_localize(None) 사용)
+        # 3. Prophet 사용을 위해 기존 Datetime 컬럼에서 Timezone 정보 제거
         data['Datetime'] = dt_col.dt.tz_localize(None)
 
-    # 타임존 처리를 위한 Pandas 타입 변경 (혹시 모를 오류 방지)
-    data['Datetime_kst'] = pd.to_datetime(data['Datetime_kst'])
+    # 타임존 처리를 위한 Pandas 타입 변경
+    if 'Datetime_kst' in data.columns:
+        data['Datetime_kst'] = pd.to_datetime(data['Datetime_kst'])
         
     return data
+
 
 @st.cache_data
 def load_daily_data_with_indicators(ticker):
@@ -96,25 +103,40 @@ def load_daily_data_with_indicators(ticker):
 # ... (상단 import 및 공통 설정, load_5m_data 함수 등은 그대로) ...
 
 # ---------------------------------------------------------
-# 3. 탭 구성
+# 3. 탭 구성 및 사이드바 옵션 선언 [수정 및 추가]
 # ---------------------------------------------------------
-tab1, tab2 = st.tabs(["⏱️ 5분봉 단기 예측 (Real-time)", "📈 상승 확률 분석 (AI Classifier)"])
 
-# ... (상단 import, load_5m_data 함수 등은 그대로) ...
+# 사이드바 옵션을 탭 외부에 먼저 선언
+st.sidebar.markdown("---")
+st.sidebar.header("단기 예측 옵션")
+
+# 분봉 선택 옵션
+interval_choice = st.sidebar.radio("분봉 선택", ('5m', '1m'))
+
+# 분봉에 따라 캔들 개수 기본값 조정
+if interval_choice == '1m':
+    default_candles = 500
+    max_candles = 2000
+else:
+    default_candles = 200
+    max_candles = 1000
+    
+display_candlesticks = st.sidebar.slider("차트 표시 캔들 개수", 50, max_candles, default_candles, step=50)
+refresh_interval = st.sidebar.slider("자동 새로고침 간격 (초)", 30, 300, 60, step=30)
+
+# 탭 생성
+tab1, tab2 = st.tabs(["⏱️ 단기 예측", "📈 상승 확률 분석"])
 
 # =========================================================
-# TAB 1: 5분봉 단기 예측 (Real-time) - 범위 조절 옵션 추가
+# TAB 1: 5분봉 단기 예측 (Real-time) - 범위 및 분봉 옵션 추가
+# =========================================================
+# =========================================================
+# TAB 1: 5분봉 단기 예측 (Real-time) - 수정된 TAB 1
 # =========================================================
 with tab1:
-    st.subheader(f"⏱️ {ticker} 5분봉 기반 단기 흐름 예측")
-    st.info("💡 참고: 무료 API 제한으로 최근 60일 간의 5분봉 데이터만 사용합니다.")
+    st.subheader(f"⏱️ {ticker} {interval_choice} 단기 흐름 예측 (프리장/애프터장 포함)")
+    st.info("💡 참고: 데이터 로드 시 **프리장(Pre-market) 및 애프터장(After-hours) 데이터가 포함**되어 학습됩니다.")
 
-    # 1. UI 옵션 추가: 표시할 캔들 개수 설정
-    st.sidebar.markdown("---")
-    st.sidebar.header("단기 예측 옵션")
-    display_candlesticks = st.sidebar.slider("차트 표시 캔들 개수", 50, 600, 150, step=50) # 50개 ~ 600개, 기본값 150
-    refresh_interval = st.sidebar.slider("자동 새로고침 간격 (초)", 30, 300, 60, step=30)
-    
     placeholder = st.empty()
     
     # ---------------------------------------------------------
@@ -123,28 +145,27 @@ with tab1:
     while True:
         with placeholder.container():
             kst_now = datetime.now(pytz.timezone('Asia/Seoul'))
-            st.write(f"마지막 업데이트 (KST): {kst_now.strftime('%Y-%m-%d %H:%M:%S')}")
+            st.write(f"마지막 업데이트 (KST): {kst_now.strftime('%Y-%m-%d %H:%M:%S')} - 현재 분봉: {interval_choice}")
             
-            with st.spinner('5분봉 데이터 다운로드 및 예측 모델 학습 중...'):
+            with st.spinner(f'{interval_choice} 데이터 다운로드 및 예측 모델 학습 중...'):
                 try:
-                    df_5m = load_5m_data(ticker)
+                    # [수정 없음] 변경된 함수 이름 및 인자 사용
+                    df_5m = load_intraday_data(ticker, interval_choice) 
                     
                     if df_5m.empty:
                         st.error("데이터를 가져올 수 없습니다. 종목 코드 또는 시장 상황을 확인해주세요.")
                         st.stop()
 
-                    # -------------------------------------------------------
-                    # [핵심 수정] 표시할 캔들 개수만큼 데이터 슬라이싱
-                    # -------------------------------------------------------
+                    # 표시할 캔들 개수만큼 데이터 슬라이싱 (최상위 변수 사용)
                     df_5m_display = df_5m.tail(display_candlesticks).copy() 
                     
-                    # Prophet 학습용 데이터는 전체 데이터를 사용하고, 시각화만 슬라이싱된 데이터 사용
-                    # (혹은 학습 데이터도 슬라이싱해서 속도를 높일 수도 있으나, 정확도를 위해 전체 사용)
+                    # Prophet 예측 설정 (60분 예측을 목표로)
+                    time_step = int(interval_choice.replace('m', ''))
+                    prediction_periods = int(60 / time_step)
                     
-                    # Prophet 데이터셋 준비 (학습은 전체 데이터로)
+                    # Prophet 데이터셋 준비 (이하 Prophet 로직 동일)
                     df_prophet = df_5m[['Datetime_kst', 'Close']].rename(columns={'Datetime_kst': 'ds', 'Close': 'y'})
                     
-                    # Prophet 학습 전, 'ds' 컬럼의 타임존 정보를 최종적으로 제거합니다.
                     if df_prophet['ds'].dt.tz is not None:
                         df_prophet['ds'] = df_prophet['ds'].dt.tz_localize(None)
                         
@@ -154,8 +175,8 @@ with tab1:
                     m = Prophet(changepoint_prior_scale=0.05, daily_seasonality=True, seasonality_mode='additive') 
                     m.fit(df_prophet)
                     
-                    # 향후 12개 구간(60분) 예측
-                    future = m.make_future_dataframe(periods=12, freq='5min')
+                    # 미래 데이터 프레임 생성
+                    future = m.make_future_dataframe(periods=prediction_periods, freq=interval_choice)
                     forecast = m.predict(future)
                     
                     # forecast 데이터에 KST 타임존 정보를 부여
@@ -165,7 +186,7 @@ with tab1:
                     # --- 차트 그리기 (캔들스틱 + 예측선) ---
                     fig = go.Figure()
 
-                    # 1. 과거 캔들스틱 차트 (슬라이싱된 데이터 사용: df_5m_display)
+                    # 1. 과거 캔들스틱 차트 (슬라이싱된 데이터 사용)
                     fig.add_trace(go.Candlestick(
                         x=df_5m_display['Datetime_kst'],
                         open=df_5m_display['Open'],
@@ -177,16 +198,11 @@ with tab1:
                         decreasing_line_color='blue'
                     ))
 
-                    # 2. Prophet 예측 선 및 신뢰 구간 (전체 데이터 사용)
-                    # 예측선
+                    # 2. Prophet 예측 선 및 신뢰 구간
                     fig.add_trace(go.Scatter(
-                        x=forecast['ds_kst'],
-                        y=forecast['yhat'],
-                        mode='lines',
-                        line=dict(color='purple', width=2, dash='dot'),
-                        name='예측 주가'
+                        x=forecast['ds_kst'], y=forecast['yhat'], mode='lines', 
+                        line=dict(color='purple', width=2, dash='dot'), name='예측 주가'
                     ))
-                    # 신뢰 구간 (생략)
                     fig.add_trace(go.Scatter(
                         x=forecast['ds_kst'], y=forecast['yhat_upper'], mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
                     ))
@@ -199,21 +215,22 @@ with tab1:
                     # 3. 현재 종가 기준으로 수평 점선 추가
                     current_close_price = df_5m_display['Close'].iloc[-1]
                     fig.add_hline(
-                        y=current_close_price, 
-                        line_dash="dash", 
-                        line_color="black", 
+                        y=current_close_price, line_dash="dash", line_color="black", 
                         annotation_text=f"현재가: {current_close_price:.2f}", 
                         annotation_position="bottom right"
                     )
 
-                    # 4. 예측값 텍스트 표시 (5분 뒤, 30분 뒤)
-                    # ... (이하 텍스트 표시 로직은 변경 없음) ...
+                    # 4. 예측값 텍스트 표시 (5분 뒤, 30분 뒤) - 동적 계산
                     future_start_idx = forecast[forecast['ds'] > df_prophet['ds'].max()].index
                     
                     if not future_start_idx.empty:
                         future_start_idx = future_start_idx[0]
-                        future_5min_idx = future_start_idx
-                        future_30min_idx = future_start_idx + 5 
+                        
+                        time_step = int(interval_choice.replace('m', ''))
+                        
+                        # 분봉에 따라 필요한 인덱스 오프셋 계산 (5분은 5/time_step, 30분은 30/time_step)
+                        future_5min_idx = future_start_idx + int(5 / time_step) -1 
+                        future_30min_idx = future_start_idx + int(30 / time_step) -1
 
                         if future_30min_idx < len(forecast):
                             price_5min = forecast.loc[future_5min_idx, 'yhat']
@@ -241,30 +258,26 @@ with tab1:
                         
                     # --- 레이아웃 설정 ---
                     fig.update_layout(
-                        title=f"📈 {ticker} 5분봉 실시간 차트 및 단기 예측 (표시 캔들: {len(df_5m_display)}개)",
+                        title=f"📈 {ticker} {interval_choice} 실시간 차트 및 단기 예측 (표시 캔들: {len(df_5m_display)}개)",
                         xaxis_rangeslider_visible=False,
                         # ... (이하 레이아웃 설정은 동일) ...
                         
                         # 실제 데이터 영역과 예측 데이터 영역 배경색 구분
                         shapes=[
                             dict( # 예측 영역 배경색 (연한 초록)
-                                type="rect",
-                                xref="x", yref="paper",
+                                type="rect", xref="x", yref="paper",
                                 x0=df_prophet['ds'].max(), 
                                 y0=0, x1=forecast['ds_kst'].max(), y1=1,
                                 fillcolor="rgba(0,255,0,0.05)", layer="below", line_width=0
                             ),
                             dict( # 과거 데이터 영역 배경색 (연한 파랑)
-                                type="rect",
-                                xref="x", yref="paper",
-                                # [수정] 차트 표시 시작점을 슬라이싱된 데이터의 시작점으로 설정
+                                type="rect", xref="x", yref="paper",
                                 x0=df_5m_display['Datetime_kst'].min(), 
                                 y0=0, x1=df_prophet['ds'].max(), y1=1,
                                 fillcolor="rgba(0,0,255,0.05)", layer="below", line_width=0
                             )
                         ],
                         xaxis=dict(
-                            # [추가] 차트의 x축 시작점을 슬라이싱된 데이터의 시작점으로 강제 설정하여 깔끔하게 보임
                             range=[df_5m_display['Datetime_kst'].min(), forecast['ds_kst'].max()]
                         )
                     )
@@ -272,7 +285,7 @@ with tab1:
                     st.plotly_chart(fig, use_container_width=True)
                     
                     st.write("---")
-                    st.write("##### 최근 5분봉 데이터 (마지막 업데이트 시점):")
+                    st.write(f"##### 최근 {interval_choice} 데이터 (마지막 업데이트 시점):")
                     st.dataframe(df_5m_display.tail())
                     
                 except Exception as e:
