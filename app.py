@@ -276,20 +276,31 @@ with tab1:
                                 yshift=10,
                                 bgcolor="rgba(255,255,255,0.7)"
                             )
+                            # --------------------------
+# 🔥 가로축 범위 축소 설정
+# --------------------------
+                            last_hist_x = df_5m_display['x'].max()
+
+# 예측 구간이 존재하면 → 예측 30분 뒤까지만 cut
+                            if not forecast_future.empty:
+    # 예측 구간 마지막 (전체 예측 끝은 아님)
+    # 30분 뒤 인덱스 찾기
+                             time_step = int(interval_choice.replace('m', ''))
+                             idx_30 = future_start_idx + int(30 / time_step) - 1
+
+                             if idx_30 < len(forecast):
+                                 right_limit = forecast.loc[idx_30, 'x']
+                             else:
+                                 right_limit = last_hist_x + timedelta(minutes=30)
+                            else:
+                              right_limit = last_hist_x
 
                     # (5) 레이아웃 (군더더기 다 빼고 깔끔하게)
                     fig.update_layout(
-                        title=f"📈 {ticker} {interval_choice} 실시간 차트 및 단기 예측 (표시 캔들: {len(df_5m_display)}개)",
-                        xaxis_title="시간 (KST)",
-                        yaxis_title="가격",
-                        xaxis_rangeslider_visible=False,
-                        hovermode="x unified",
-                        xaxis=dict(
-                            range=[
-                                df_5m_display['x'].min(),
-                                forecast['x'].max() if not forecast.empty else df_5m_display['x'].max()
-                            ]
-                        )
+                     title=f"📈 {ticker} {interval_choice} 실시간 차트 및 단기 예측",
+                      xaxis_rangeslider_visible=False,
+                      hovermode="x unified",
+                     xaxis=dict(range=[df_5m_display['x'].min(), right_limit])
                     )
 
                     st.plotly_chart(fig, use_container_width=True)
