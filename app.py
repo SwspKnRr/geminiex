@@ -36,17 +36,24 @@ def load_5m_data(ticker):
         
     data.reset_index(inplace=True)
     
-    # Timezone 제거 (Prophet 오류 방지)
+    # Timezone 처리
     if 'Datetime' in data.columns:
-        # data['Datetime'] = pd.to_datetime(data['Datetime']).dt.tz_localize(None) # 이전 코드
+        dt_col = data['Datetime']
         
-        # [핵심 수정] Datetime 컬럼을 KST로 변환 후, Datetime_kst 컬럼 생성
-        # yfinance의 Datetime은 UTC 기준이므로, KST로 변환하여 새로운 컬럼을 만듭니다.
-        # 이 컬럼을 차트 및 Prophet 학습에 사용합니다.
-        data['Datetime_kst'] = data['Datetime'].dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
+        # 1. Datetime 컬럼이 이미 tz-aware인지 확인
+        if dt_col.dt.tz is None:
+            # tz-aware가 아니면 (대부분의 경우 yfinance가 처음 다운로드할 때) UTC를 부여
+            dt_col = dt_col.dt.tz_localize('UTC')
         
-        # Prophet을 위해 기존 Datetime 컬럼에서 Timezone 정보만 제거
-        data['Datetime'] = data['Datetime'].dt.tz_localize(None)
+        # 2. Datetime_kst 컬럼 생성 (KST로 변환)
+        # 이미 tz-aware이므로 tz_convert를 사용
+        data['Datetime_kst'] = dt_col.dt.tz_convert('Asia/Seoul')
+        
+        # 3. Prophet 사용을 위해 기존 Datetime 컬럼에서 Timezone 정보 제거 (tz_localize(None) 사용)
+        data['Datetime'] = dt_col.dt.tz_localize(None)
+
+    # 타임존 처리를 위한 Pandas 타입 변경 (혹시 모를 오류 방지)
+    data['Datetime_kst'] = pd.to_datetime(data['Datetime_kst'])
         
     return data
 
